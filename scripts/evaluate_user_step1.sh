@@ -1,0 +1,67 @@
+work_dir=''
+cd $work_dir
+
+DATA_DIR="./data/lastfm_ab"
+INIT_NUM=10
+TRAIN_CANS_NUM=20
+EVAL_CANS_NUM=20
+A_RATIO=1
+B_RATIO=1
+STAGE="test"
+MAX_EPOCH=4
+MODEL="gpt-4o-mini-2024-07-18"
+MODEL_PATH="./output/lastfm/SASRec.pt"
+API_KEY=""
+MAX_RETRY_NUM=5
+SEED=303
+MP=16
+TEMPERATURE=0.0
+LABEL="user_experiment"
+P_MODEL='SASRec'
+PRIOR_FILE="./data/prior_lastfm/SASRec_AB_20.csv"
+OUTPUT_FILE="./data/lastfm_ab_step1/${P_MODEL}_${LABEL}_${MODEL}_${SEED}_${TEMPERATURE}_${MP}_${MAX_EPOCH}_${A_RATIO}_${B_RATIO}_${TRAIN_CANS_NUM}_${EVAL_CANS_NUM}.jsonl"
+SAVE_REC_DIR="./data/lastfm_ab_save/rec_${P_MODEL}_${LABEL}_${MODEL}_${MAX_EPOCH}_${A_RATIO}_${B_RATIO}_${TRAIN_CANS_NUM}_${EVAL_CANS_NUM}"
+SAVE_USER_DIR="./data/lastfm_ab_save/user_${P_MODEL}_${LABEL}_${MODEL}_${MAX_EPOCH}_${A_RATIO}_${B_RATIO}_${TRAIN_CANS_NUM}_${EVAL_CANS_NUM}"
+
+echo "DATA_DIR = ${DATA_DIR}"
+echo "MODEL_PATH = ${MODEL_PATH}"
+echo "INIT_NUM = ${INIT_NUM}"
+echo "TRAIN_CANS_NUM = ${TRAIN_CANS_NUM}"
+echo "EVAL_CANS_NUM = ${EVAL_CANS_NUM}"
+echo "A_RATIO = ${A_RATIO}"
+echo "B_RATIO = ${B_RATIO}"
+echo "STAGE = ${STAGE}"
+echo "MAX_EPOCH = ${MAX_EPOCH}"
+echo "MODEL = ${MODEL}"
+echo "API_KEY = ${API_KEY}"
+echo "MAX_RETRY_NUM = ${MAX_RETRY_NUM}"
+echo "SEED = ${SEED}"
+echo "MP = ${MP}"
+echo "TEMPERATURE = ${TEMPERATURE}"
+echo "LABEL = ${LABEL}"
+echo "PRIOR_FILE = ${PRIOR_FILE}"
+echo "OUTPUT_FILE = ${OUTPUT_FILE}"
+echo "SAVE_REC_DIR = ${SAVE_REC_DIR}"
+echo "SAVE_USER_DIR = ${SAVE_USER_DIR}"
+
+CUDA_VISIBLE_DEVICES=0 python ./afl/evaluate_user_step1.py \
+    --data_dir=$DATA_DIR \
+    --init_num=$INIT_NUM \
+    --prior_file=$PRIOR_FILE \
+    --train_cans_num=$TRAIN_CANS_NUM \
+    --eval_cans_num=$EVAL_CANS_NUM \
+    --a_ratio=$A_RATIO \
+    --b_ratio=$B_RATIO \
+    --stage=$STAGE \
+    --output_file=$OUTPUT_FILE \
+    --model=$MODEL \
+    --api_key=$API_KEY \
+    --max_epoch=$MAX_EPOCH \
+    --max_retry_num=$MAX_RETRY_NUM \
+    --seed=$SEED \
+    --mp=$MP \
+    --temperature=$TEMPERATURE \
+    --save_info \
+    --save_rec_dir=$SAVE_REC_DIR \
+    --save_user_dir=$SAVE_USER_DIR \
+    --model_path=$MODEL_PATH 
