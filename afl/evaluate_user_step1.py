@@ -18,7 +18,7 @@ from dataset.lastfmAB_dataset import LastfmABDataset
 from utils.regular_function import split_user_ab_response, split_rec_reponse, split_user_response
 from utils.rw_process import append_jsonl, read_jsonl
 from utils.api_request import api_request
-from utils.agent import RecAgent, UserAgent, UserModelAgent
+from utils.agent import RecAgent, UserModelAgent
 from utils.model import SASRec
 
 finish_num = 0
