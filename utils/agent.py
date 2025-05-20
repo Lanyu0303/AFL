@@ -21,7 +21,7 @@ from utils.api_request import api_request
 from utils.model import SASRec
 
 class RecAgent:
-    def __init__(self, args, mode='rec'):
+    def __init__(self, args, mode='prior_rec'):
         self.memory = []
         self.info_list = []
         self.args = args
@@ -29,9 +29,19 @@ class RecAgent:
         self.load_prompt()
 
     def load_prompt(self):
-        #TODO: under review
-        pass
-    
+        if self.mode =='prior_rec':
+            if 'lastfm' in self.args.data_dir:
+                from constant.lastfm_prior_model_prompt import rec_system_prompt, rec_user_prompt, rec_memory_system_prompt, rec_memory_user_prompt, rec_build_memory
+            else:
+                raise ValueError("Invalid mode: {}".format(self.args.data_dir))
+            self.rec_system_prompt = rec_system_prompt
+            self.rec_user_prompt = rec_user_prompt
+            self.rec_memory_system_prompt = rec_memory_system_prompt
+            self.rec_memory_user_prompt = rec_memory_user_prompt
+            self.rec_build_memory = rec_build_memory
+        else:
+            raise ValueError("Invalid mode: {}".format(self.mode))
+
     def act(self, data, reason=None, item=None):
         if self.mode =='prior_rec':
             if len(self.memory) == 0:
@@ -61,7 +71,7 @@ class RecAgent:
 
 
 class UserModelAgent:
-    def __init__(self, args, mode='rec'):
+    def __init__(self, args, mode='prior_rec'):
         self.memory = []
         self.info_list = []
         self.args = args
@@ -114,12 +124,56 @@ class UserModelAgent:
         print("load model success")
     
     def load_prompt(self):
-        #TODO: under review
-        pass
+        if self.mode == 'prior_rec':
+            if 'lastfm' in self.args.data_dir:
+                from constant.lastfm_prior_model_prompt import user_system_promt, user_user_prompt, user_memory_system_prompt, user_memory_user_prompt, user_recommend_system_prompt, user_recommend_user_prompt, user_recommend_memory_system_prompt, user_recommend_memory_user_prompt, user_build_memory, user_build_memory_2
+            else:
+                raise ValueError("Invalid dataset: {}".format(self.args.data_dir))
+            self.user_system_promt = user_system_promt
+            self.user_user_prompt = user_user_prompt
+            self.user_memory_system_prompt = user_memory_system_prompt
+            self.user_memory_user_prompt = user_memory_user_prompt
+            self.user_recommend_system_prompt = user_recommend_system_prompt
+            self.user_recommend_user_prompt = user_recommend_user_prompt
+            self.user_recommend_memory_system_prompt = user_recommend_memory_system_prompt
+            self.user_recommend_memory_user_prompt = user_recommend_memory_user_prompt
+            self.user_build_memory = user_build_memory
+            self.user_build_memory_2 = user_build_memory_2
 
+        elif self.mode == 'pred':
+            if 'lastfm' in self.args.data_dir:
+                from constant.lastfm_ab_model_prompt import user_system_prompt, user_user_prompt, user_memory_system_prompt, user_memory_user_prompt, user_build_memory, user_build_memory_2, user_memory_system_prompt, user_memory_user_prompt
+            else:
+                raise ValueError("Invalid dataset: {}".format(self.args.data_dir))
+            self.user_system_prompt = user_system_prompt
+            self.user_user_prompt = user_user_prompt
+            self.user_memory_system_prompt = user_memory_system_prompt
+            self.user_memory_user_prompt = user_memory_user_prompt
+            self.user_build_memory = user_build_memory
+            self.user_build_memory_2 = user_build_memory_2
     def act(self, data, reason=None, item=None):
-        #TODO: under review
-        pass
+        if self.mode == 'prior_rec':
+            model_output = self.model_generate(data['seq'], data['len_seq'], data['cans'])
+            if len(self.memory) == 0:
+                system_prompt = self.user_system_promt.format(data['seq_str'], data['prior_answer'])
+            else:
+                system_prompt = self.user_system_promt.format(data['seq_str'], data['prior_answer'])
+            user_prompt = self.user_user_prompt.format(data['cans_str'],model_output, item, reason)
+            response = api_request(system_prompt, user_prompt, self.args)
+            return response
+        else:
+            raise ValueError("Invalid mode: {}".format(self.mode))
+
+    def pred_model(self, data, score):
+        if len(self.memory) == 0:
+            system_prompt = self.user_system_prompt.format(data['seq_str'])
+            user_prompt = self.user_user_prompt.format(data['pred_item'], score)
+        else:
+            system_prompt = self.user_memory_system_prompt.format(data['seq_str'], data['cans_str'],'\n'.join(self.memory))
+            user_prompt = self.user_memory_user_prompt.format(data['pred_item'],score)
+            
+        response = api_request(system_prompt, user_prompt, self.args)
+        return response
     
     def build_memory(self, info):
         if info['user_reason'] is not None:
@@ -137,3 +191,24 @@ class UserModelAgent:
     def load_memory(self, path):
         self.info_list = read_jsonl(path)
         self.memory = [self.build_memory(info) for info in self.info_list]
+
+    def model_generate(self, seq, len_seq, candidates):
+        seq_b = [seq]
+        len_seq_b = [len_seq]
+        states = np.array(seq_b)
+        states = torch.LongTensor(states)
+        states = states.to(self.device)
+        prediction = self.model.forward_eval(states, np.array(len_seq_b))
+
+        sampling_idx=[True]*self.item_num
+        cans_num = len(candidates)
+        for i in candidates:
+            sampling_idx.__setitem__(i,False)
+        sampling_idxs = [torch.tensor(sampling_idx)]
+        sampling_idxs=torch.stack(sampling_idxs,dim=0)
+        prediction = prediction.cpu().detach().masked_fill(sampling_idxs,prediction.min().item()-1)
+        values, topK = prediction.topk(cans_num, dim=1, largest=True, sorted=True)
+        topK = topK.numpy()[0]
+        name_list = [self.id2name[id] for id in topK]
+        len_ret = int(len(name_list) /4 )
+        return ', '.join(name_list[:len_ret])
