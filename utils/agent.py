@@ -212,3 +212,33 @@ class UserModelAgent:
         name_list = [self.id2name[id] for id in topK]
         len_ret = int(len(name_list) /4 )
         return ', '.join(name_list[:len_ret])
+
+    def score(self, seq, len_seq, candidates):
+        #print("seq = ", seq)
+        #print("len seq = ", len_seq)
+        #print("cans = ", candidates)
+        seq_b = [seq]
+        len_seq_b = [len_seq]
+        states = np.array(seq_b)
+        states = torch.LongTensor(states)
+        states = states.to(self.device)
+        # pred
+        prediction = self.model.forward_eval(states, np.array(len_seq_b))
+
+        sampling_idx=[True]*self.item_num
+        cans_num = len(candidates)
+        for i in candidates:
+            sampling_idx.__setitem__(i,False)
+        sampling_idxs = [torch.tensor(sampling_idx)]
+        sampling_idxs=torch.stack(sampling_idxs,dim=0)
+        prediction = prediction.cpu().detach().masked_fill(sampling_idxs,prediction.min().item()-1)
+        values, topK = prediction.topk(cans_num, dim=1, largest=True, sorted=True)
+        values = values.numpy()[0]
+        topK = topK.numpy()[0]
+        score_dict = {}
+        for i in range(len(topK)):
+            id = topK[i]
+            score = values[i]
+            name = self.id2name[id]
+            score_dict[name] = score
+        return score_dict
