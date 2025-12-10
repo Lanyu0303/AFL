@@ -4,14 +4,14 @@ cd $work_dir
 DATA_DIR="./data/lastfm/"
 STAGE="test"
 CANS_NUM=20
-MAX_EPOCH=5
+MAX_EPOCH=4
 MODEL="gpt-4o-mini-2024-07-18" 
 API_KEY="" 
 MODEL_PATH="./output/lastfm/SASRec.pt"
 MAX_RETRY_NUM=5
 SEED=303
 MP=16
-TEMPERATURE=0.0
+TEMPERATURE=0.4
 LABEL="recommendation_experiment"
 P_MODEL='SASRec'
 PRIOR_FILE="./data/prior_lastfm/SASRec.csv"

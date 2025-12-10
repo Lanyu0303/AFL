@@ -126,17 +126,13 @@ class UserModelAgent:
     def load_prompt(self):
         if self.mode == 'prior_rec':
             if 'lastfm' in self.args.data_dir:
-                from constant.lastfm_prior_model_prompt import user_system_promt, user_user_prompt, user_memory_system_prompt, user_memory_user_prompt, user_recommend_system_prompt, user_recommend_user_prompt, user_recommend_memory_system_prompt, user_recommend_memory_user_prompt, user_build_memory, user_build_memory_2
+                from constant.lastfm_prior_model_prompt import user_system_promt, user_user_prompt, user_memory_system_prompt, user_memory_user_prompt, user_build_memory, user_build_memory_2
             else:
                 raise ValueError("Invalid dataset: {}".format(self.args.data_dir))
             self.user_system_promt = user_system_promt
             self.user_user_prompt = user_user_prompt
             self.user_memory_system_prompt = user_memory_system_prompt
             self.user_memory_user_prompt = user_memory_user_prompt
-            self.user_recommend_system_prompt = user_recommend_system_prompt
-            self.user_recommend_user_prompt = user_recommend_user_prompt
-            self.user_recommend_memory_system_prompt = user_recommend_memory_system_prompt
-            self.user_recommend_memory_user_prompt = user_recommend_memory_user_prompt
             self.user_build_memory = user_build_memory
             self.user_build_memory_2 = user_build_memory_2
 
