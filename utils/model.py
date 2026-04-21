@@ -2,6 +2,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from utils.multimodal_features import MultiModalConfig, MultiModalItemEncoder
+
 
 def extract_axis_1(data, indices):
     res = []
@@ -98,7 +100,7 @@ class MultiHeadAttention(nn.Module):
         return output_res
 
 class SASRec(nn.Module):
-    def __init__(self, hidden_size, item_num, state_size, dropout, device, num_heads=1):
+    def __init__(self, hidden_size, item_num, state_size, dropout, device, num_heads=1, mm_config=None):
         super().__init__()
         self.state_size = state_size
         self.hidden_size = hidden_size
@@ -110,6 +112,13 @@ class SASRec(nn.Module):
             embedding_dim=hidden_size,
         )
         nn.init.normal_(self.item_embeddings.weight, 0, 1)
+        self.mm_config = MultiModalConfig(**mm_config) if isinstance(mm_config, dict) else (mm_config or MultiModalConfig())
+        self.item_encoder = MultiModalItemEncoder(
+            hidden_size=hidden_size,
+            item_num=item_num,
+            id_embedding=self.item_embeddings,
+            config=self.mm_config,
+        )
         self.positional_embeddings = nn.Embedding(
             num_embeddings=state_size,
             embedding_dim=hidden_size
@@ -125,8 +134,8 @@ class SASRec(nn.Module):
         # self.ac_func = nn.ReLU()
 
     def forward(self, states, len_states):
-        # inputs_emb = self.item_embeddings(states) * self.item_embeddings.embedding_dim ** 0.5
-        inputs_emb = self.item_embeddings(states)
+        # inputs_emb = self.item_encoder(states) * self.item_embeddings.embedding_dim ** 0.5
+        inputs_emb = self.item_encoder(states)
         inputs_emb += self.positional_embeddings(torch.arange(self.state_size).to(self.device))
         seq = self.emb_dropout(inputs_emb)
         mask = torch.ne(states, self.item_num).float().unsqueeze(-1).to(self.device)
@@ -141,8 +150,8 @@ class SASRec(nn.Module):
         return supervised_output
 
     def forward_eval(self, states, len_states):
-        # inputs_emb = self.item_embeddings(states) * self.item_embeddings.embedding_dim ** 0.5
-        inputs_emb = self.item_embeddings(states)
+        # inputs_emb = self.item_encoder(states) * self.item_embeddings.embedding_dim ** 0.5
+        inputs_emb = self.item_encoder(states)
         inputs_emb += self.positional_embeddings(torch.arange(self.state_size).to(self.device))
         seq = self.emb_dropout(inputs_emb)
         mask = torch.ne(states, self.item_num).float().unsqueeze(-1).to(self.device)
@@ -157,8 +166,8 @@ class SASRec(nn.Module):
         return supervised_output
     
     def cacul_h(self, states, len_states):
-        # inputs_emb = self.item_embeddings(states) * self.item_embeddings.embedding_dim ** 0.5
-        inputs_emb = self.item_embeddings(states)
+        # inputs_emb = self.item_encoder(states) * self.item_embeddings.embedding_dim ** 0.5
+        inputs_emb = self.item_encoder(states)
         inputs_emb += self.positional_embeddings(torch.arange(self.state_size).to(self.device))
         seq = self.emb_dropout(inputs_emb)
         mask = torch.ne(states, self.item_num).float().unsqueeze(-1).to(self.device)
@@ -173,6 +182,6 @@ class SASRec(nn.Module):
         return state_hidden
     
     def cacu_x(self, x):
-        x = self.item_embeddings(x)
+        x = self.item_encoder(x)
 
         return x
