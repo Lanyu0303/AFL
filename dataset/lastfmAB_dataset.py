@@ -1,14 +1,22 @@
-import torch
 import os
 import torch.utils.data as data
 
-import pandas as pd
 import random
 import pickle
 
 class LastfmABDataset(data.Dataset):
-    def __init__(self, res_num=10, train_cans_num=10,eval_cans_num=20,a_ratio=1,b_ratio=1,data_dir='./data/lastfm_ab', stage='test', sep=", "):
-        #initialize
+    def __init__(
+        self,
+        res_num=10,
+        train_cans_num=10,
+        eval_cans_num=20,
+        a_ratio=1,
+        b_ratio=1,
+        data_dir='./data/lastfm_ab',
+        stage='test',
+        sep=", ",
+    ):
+        # initialize
         self.data_dir = data_dir
         self.stage = stage
         self.sep = sep
@@ -17,8 +25,9 @@ class LastfmABDataset(data.Dataset):
         self.eval_cans_num = eval_cans_num
         self.a_ratio = a_ratio
         self.b_ratio = b_ratio
-        self.padding_item_id=4606
-        #calculate
+        self.padding_item_id = 4606
+        self.max_seq_len = 10
+        # calculate
         self.pred_num = int((a_ratio) / (a_ratio + b_ratio) * eval_cans_num)
         self.fake_num = int((b_ratio) / (a_ratio + b_ratio) * eval_cans_num)
         assert self.pred_num + self.fake_num == self.eval_cans_num, "[calculate] sum error"
@@ -26,10 +35,10 @@ class LastfmABDataset(data.Dataset):
         self.data = self.build_data()
 
     def __len__(self):
-        return len(self.data['user_id'])
+        return len(self.data)
     
     def __getitem__(self, i):
-        temp = self.data.iloc[i]
+        temp = self.data[i]
         train_cands = self.train_negative_sampling(temp['full_list'], temp['next'])
         train_cands_name = [self.item_id2name[id] for id in train_cands]
         eval_cands = self.eval_negative_sampling(temp['full_list'], temp['pred_list'], train_cands)
@@ -70,12 +79,23 @@ class LastfmABDataset(data.Dataset):
     
     def train_negative_sampling(self, full_list, next_item):
         canset = [i for i in list(self.item_id2name.keys()) if i not in full_list]
-        candidates = random.sample(canset, self.train_cans_num - 1) + [next_item]
+        sample_num = self.train_cans_num - 1
+        if len(canset) < sample_num:
+            raise ValueError(
+                f"[train_negative_sampling] not enough candidates: "
+                f"need {sample_num}, got {len(canset)}"
+            )
+        candidates = random.sample(canset, sample_num) + [next_item]
         random.shuffle(candidates)
         return candidates
     
     def eval_negative_sampling(self, full_list, pred_list, train_cans):
         canset = [i for i in list(self.item_id2name.keys()) if i not in full_list and i not in train_cans]
+        if len(canset) < self.fake_num:
+            raise ValueError(
+                f"[eval_negative_sampling] not enough candidates: "
+                f"need {self.fake_num}, got {len(canset)}"
+            )
         candidates = random.sample(canset, self.fake_num) + pred_list
         random.shuffle(candidates)
         return candidates   
@@ -90,20 +110,23 @@ class LastfmABDataset(data.Dataset):
         return music_id2name    
     
     def build_data(self):
-        if self.stage == 'test':
-            file_name = "test_llara.pkl"
+        stage_to_filename = {
+            'test': 'test_llara.pkl',
+        }
+        if self.stage not in stage_to_filename:
+            raise ValueError(f"Unsupported stage: {self.stage}")
+        file_name = stage_to_filename[self.stage]
         data_path = os.path.join(self.data_dir, file_name)
         with open(data_path, 'rb') as file:
             data_list = pickle.load(file)
-        data = pd.DataFrame(data_list)
-        #function
+        # function
         def split_seq_next(x):
             total_num = len(x)
             init_num = total_num - self.res_num
             seq_num = init_num - 1
             seq_list = x[:seq_num]
-            next = x[seq_num]
-            return (seq_list, next)
+            next_item = x[seq_num]
+            return (seq_list, next_item)
         
         def split_init_pred(x):
             total_num = len(x)
@@ -124,24 +147,33 @@ class LastfmABDataset(data.Dataset):
         
         def pad_seq(x):
             pad_x = x.copy()
-            while len(pad_x) < 10:
+            while len(pad_x) < self.max_seq_len:
                 pad_x.append(self.padding_item_id)
             return pad_x
         
-        # train
-        data['seq_unpad'] = data['artist_list'].apply(split_seq_next).apply(lambda x: x[0])
-        data['next'] = data['artist_list'].apply(split_seq_next).apply(lambda x: x[1])
-        data['seq'] = data['seq_unpad'].apply(pad_seq)
-        data['len_seq'] = data['seq_unpad'].apply(get_seq_len)
-        data['seq_title'] = data['seq_unpad'].apply(seq_to_title)
-        data['next_item_title'] = data['next'].apply(id_to_title)
-        # eval
-        data['init_list'] = data['artist_list'].apply(split_init_pred).apply(lambda x: x[0])
-        data['init_pad'] = data['init_list'] .apply(pad_seq)
-        data['len_init'] = data['init_list'].apply(get_seq_len)
-        data['pred_list'] = data['artist_list'].apply(split_init_pred).apply(lambda x: x[1])
-        data['init_title_list'] = data['init_list'].apply(seq_to_title)
-        data['pred_title_list'] = data['pred_list'].apply(seq_to_title)
+        processed_data = []
+        for row in data_list:
+            # keep backward compatibility with older key name 'artist_list'
+            item_list = row.get('item_list', row.get('artist_list'))
+            if item_list is None:
+                raise KeyError("Each row in test_llara.pkl must contain 'item_list' (or legacy 'artist_list').")
+            seq_unpad, next_item = split_seq_next(item_list)
+            init_list, pred_list = split_init_pred(item_list)
+            sample = dict(row)
+            sample['seq_unpad'] = seq_unpad
+            sample['next'] = next_item
+            sample['seq'] = pad_seq(seq_unpad)
+            sample['len_seq'] = get_seq_len(seq_unpad)
+            sample['seq_title'] = seq_to_title(seq_unpad)
+            sample['next_item_title'] = id_to_title(next_item)
+            sample['init_list'] = init_list
+            sample['init_pad'] = pad_seq(init_list)
+            sample['len_init'] = get_seq_len(init_list)
+            sample['pred_list'] = pred_list
+            sample['init_title_list'] = seq_to_title(init_list)
+            sample['pred_title_list'] = seq_to_title(pred_list)
+            processed_data.append(sample)
+        data = processed_data
         return data
     
 

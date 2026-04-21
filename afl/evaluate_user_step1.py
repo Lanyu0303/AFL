@@ -17,13 +17,21 @@ from dataset.lastfmAB_dataset import LastfmABDataset
 
 from utils.regular_function import split_user_ab_response, split_rec_reponse, split_user_response
 from utils.rw_process import append_jsonl, read_jsonl
-from utils.api_request import api_request
 from utils.agent import RecAgent, UserModelAgent
+from afl.llm_interface import LLMInterface
 from utils.model import SASRec
 
 finish_num = 0
 total = 0
 correct = 0
+_WORKER_LLM = None
+
+
+def get_worker_llm(args):
+    global _WORKER_LLM
+    if _WORKER_LLM is None:
+        _WORKER_LLM = LLMInterface(args)
+    return _WORKER_LLM
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -39,12 +47,15 @@ def get_args():
     parser.add_argument('--sep', type=str, default=', ')
     parser.add_argument('--output_file', type=str)
     parser.add_argument('--model', type=str, default='')
-    parser.add_argument('--api_key', type=str)
     parser.add_argument('--max_epoch', type=int, default=5)
-    parser.add_argument('--max_retry_num', type=int, default=5)
     parser.add_argument('--seed', type=int, default=333)
     parser.add_argument('--mp', type=int, default=1)
     parser.add_argument('--temperature', type=float, default=0.0)
+    parser.add_argument('--local_model_name', type=str, default='Qwen/Qwen2-1.5B-Instruct')
+    parser.add_argument('--max_new_tokens', type=int, default=256)
+    parser.add_argument('--top_p', type=float, default=1.0)
+    parser.add_argument('--load_in_4bit', action='store_true')
+    parser.add_argument('--use_item_meta_prompt', action='store_true', help='Use item_meta semantics in prompts when provided by dataset')
     parser.add_argument("--save_info",action="store_true")
     parser.add_argument("--save_rec_dir", type=str, default=None)
     parser.add_argument("--save_user_dir", type=str, default=None)
@@ -52,8 +63,9 @@ def get_args():
 
 def recommend(data, args):
     start_time = time.time()
-    rec_agent = RecAgent(args, 'prior_rec')
-    user_agent = UserModelAgent(args, "prior_rec")
+    llm = get_worker_llm(args)
+    rec_agent = RecAgent(args, llm=llm, mode='prior_rec')
+    user_agent = UserModelAgent(args, llm=llm, mode="prior_rec")
     flag = False
     epoch = 1
     rec_item = None
@@ -127,7 +139,7 @@ def setcallback(x):
 def main(args):
     if os.path.exists(args.output_file):
         os.remove(args.output_file)
-    if 'lastfm' in args.data_dir:
+    if 'lastfm' in args.data_dir or 'amazon' in args.data_dir:
         dataset = LastfmABDataset(args.init_num, args.train_cans_num, args.eval_cans_num, args.a_ratio, args.b_ratio, args.data_dir, args.stage, args.sep)
     else:
         raise ValueError("Invalid dataset name.")

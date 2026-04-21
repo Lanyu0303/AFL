@@ -14,49 +14,121 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 from dataset.lastfm_dataset import LastfmDataset
+from dataset.amazon_dataset import AmazonDataset
 
 from utils.regular_function import split_user_response, split_rec_reponse
 from utils.rw_process import append_jsonl
 from utils.agent import RecAgent, UserModelAgent
+from afl.llm_interface import LLMInterface
 from utils.model import SASRec
 finish_num = 0
 total = 0
 correct = 0
+_WORKER_LLM = None
+
+
+def get_worker_llm(args):
+    global _WORKER_LLM
+    if _WORKER_LLM is None:
+        _WORKER_LLM = LLMInterface(args)
+    return _WORKER_LLM
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='')
     parser.add_argument('--model_path', type=str, default=None)
     parser.add_argument('--prior_file', type=str, default='')
+    parser.add_argument(
+        '--prior_mode',
+        type=str,
+        default='auto',
+        choices=['auto', 'file', 'empty', 'random', 'oracle'],
+        help='How to build prior_answer when prior_file is missing or partial.',
+    )
     parser.add_argument('--stage', type=str, default='test')
     parser.add_argument('--cans_num', type=int, default=20)
     parser.add_argument('--sep', type=str, default=', ')
     parser.add_argument('--max_epoch', type=int, default=1)
     parser.add_argument('--output_file', type=str)
     parser.add_argument('--model', type=str, default='')
-    parser.add_argument('--api_key', type=str)
-    parser.add_argument('--max_retry_num', type=int, default=5)
     parser.add_argument('--seed', type=int, default=333)
     parser.add_argument('--mp', type=int, default=1)
     parser.add_argument('--temperature', type=float, default=0.0)
+    parser.add_argument('--local_model_name', type=str, default='Qwen/Qwen2-1.5B-Instruct')
+    parser.add_argument('--max_new_tokens', type=int, default=256)
+    parser.add_argument('--top_p', type=float, default=1.0)
+    parser.add_argument('--load_in_4bit', action='store_true')
     parser.add_argument("--save_info",action="store_true")
+    parser.add_argument('--use_item_meta_prompt', action='store_true', help='Use item_meta semantics in prompt candidates when available')
+    parser.add_argument('--item_meta_path', type=str, default='', help='Optional item_meta.df path for semantic prompt enrichment')
     parser.add_argument("--save_rec_dir", type=str, default=None)
     parser.add_argument("--save_user_dir", type=str, default=None)
+    parser.add_argument("--max_parse_retry", type=int, default=5)
     return parser.parse_args()
+
+
+def fallback_prior_answer(sample, mode):
+    if mode == 'empty':
+        return ''
+    if mode == 'oracle':
+        return sample['correct_answer']
+    if mode == 'random':
+        cans = sample.get('cans_name', [])
+        return random.choice(cans) if len(cans) > 0 else sample['correct_answer']
+    return ''
+
+
+def get_prior_dict(data_list, args):
+    use_prior_file = bool(args.prior_file) and os.path.exists(args.prior_file)
+    if args.prior_mode == 'file' and not use_prior_file:
+        raise FileNotFoundError(f"prior_file not found: {args.prior_file}")
+
+    prior_dict = {}
+    if use_prior_file:
+        import pandas as pd
+        prior_df = pd.read_csv(args.prior_file)
+        for row in prior_df.to_dict('records'):
+            if 'id' in row and 'generate' in row:
+                prior_dict[row['id']] = row['generate']
+        print(f"loaded prior entries from file: {len(prior_dict)}")
+    elif args.prior_mode in ('auto', 'file'):
+        print("prior_file missing -> fallback prior mode enabled")
+
+    if args.prior_mode == 'auto':
+        fallback_mode = 'random' if 'amazon' in args.data_dir else 'empty'
+    else:
+        fallback_mode = args.prior_mode
+
+    merge_data_list = []
+    for sample in data_list:
+        prior_answer = prior_dict.get(sample['id'])
+        if prior_answer is None:
+            prior_answer = fallback_prior_answer(sample, fallback_mode)
+        merge_data = sample.copy()
+        merge_data['prior_answer'] = prior_answer
+        merge_data_list.append(merge_data)
+    return merge_data_list
 
 def recommend(data, args):
     start_time = time.time()
-    rec_agent = RecAgent(args,'prior_rec')
-    user_agent = UserModelAgent(args,'prior_rec')
+    llm = get_worker_llm(args)
+    rec_agent = RecAgent(args, llm=llm, mode='prior_rec')
+    user_agent = UserModelAgent(args, llm=llm, mode='prior_rec')
     flag = False
     epoch = 1
     rec_item = None
     new_data_list = []
     while flag == False and epoch <= args.max_epoch:
         #rec agent
+        rec_retry = 0
         while True:
             rec_agent_response = rec_agent.act(data)
             rec_reason, rec_item = split_rec_reponse(rec_agent_response)
             if rec_item is not None:
+                break
+            rec_retry += 1
+            if rec_retry >= args.max_parse_retry:
+                rec_item = data['cans_name'][0] if data.get('cans_name') else data['correct_answer']
+                rec_reason = "fallback_due_to_invalid_generation"
                 break
         if args.max_epoch == 1:
             new_data = {'id':data['id'],'seq_name':data['seq_name'], 'cans_name':data['cans_name'], 'correct_answer':data['correct_answer'], 'epoch':epoch, 'rec_res':rec_agent_response, 'user_res':None,'prior_answer':data['prior_answer']}
@@ -68,10 +140,16 @@ def recommend(data, args):
             break
         
         #user agent
+        user_retry = 0
         while True:
             user_agent_response = user_agent.act(data,rec_reason, rec_item)
             user_reason, flag  = split_user_response(user_agent_response)
             if flag is not None:
+                break
+            user_retry += 1
+            if user_retry >= args.max_parse_retry:
+                user_reason = "fallback_due_to_invalid_generation"
+                flag = False
                 break
 
         # save
@@ -124,24 +202,15 @@ def main(args):
         os.remove(args.output_file)
     if 'lastfm' in args.data_dir:
         dataset = LastfmDataset(args.data_dir, args.stage, args.cans_num, args.sep, True)
+    elif 'amazon' in args.data_dir:
+        dataset = AmazonDataset(args.data_dir, args.stage, args.cans_num, args.sep, True, use_item_meta=args.use_item_meta_prompt, item_meta_path=args.item_meta_path)
+    else:
+        raise ValueError(f"Unsupported dataset path: {args.data_dir}")
     global total
-    data_list = []
+    data_list = list(tqdm(dataset))
+    total = len(data_list)
     print("data size = ", total)
-    for data in tqdm(dataset):
-        data_list.append(data)
-    import pandas as pd
-    prior_df = pd.read_csv(args.prior_file)
-    prior_list = prior_df.to_dict('records')
-    prior_dict = {}
-    for data in prior_list:
-        prior_dict[data['id']] = data
-
-    merge_data_list = []
-    for data in data_list:
-        generate = prior_dict[data['id']]['generate']
-        merge_data = data.copy()
-        merge_data['prior_answer'] = generate
-        merge_data_list.append(merge_data)
+    merge_data_list = get_prior_dict(data_list, args)
     pool = multiprocessing.Pool(args.mp)
     total = len(merge_data_list)
     for data in tqdm(merge_data_list):
